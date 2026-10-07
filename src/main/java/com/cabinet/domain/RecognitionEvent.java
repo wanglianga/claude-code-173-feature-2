@@ -64,4 +64,8 @@ public class RecognitionEvent extends BaseEntity {
     /** 识别原文（设备上报 JSON 快照） */
     @Column(length = 2000)
     private String rawPayload;
+
+    /** 关门/结算后才到达（设备离线集中补传），原始事件保留但不参与自动结算 */
+    @Builder.Default
+    private boolean lateArrival = false;
 }

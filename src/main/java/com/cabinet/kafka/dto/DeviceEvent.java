@@ -52,5 +52,8 @@ public class DeviceEvent {
     /** 卡货货道 */
     private String jamChannelCode;
 
+    /** 设备侧事件唯一 ID（用于幂等去重）；为空时服务端按内容指纹去重 */
+    private String eventId;
+
     private LocalDateTime eventTime;
 }

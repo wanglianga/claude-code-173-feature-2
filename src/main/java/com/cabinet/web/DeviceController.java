@@ -27,37 +27,50 @@ public class DeviceController {
     private final KafkaTemplate<String, DeviceEvent> kafkaTemplate;
     private final DeviceEventProcessor processor;
 
-    @Operation(summary = "上报单个设备事件（默认进 Kafka；sync=true 同步处理）")
+    @Operation(summary = "上报单个设备事件（默认进 Kafka；sync=true 同步处理）。"
+            + "重复 eventId/内容指纹自动忽略；关门后补传识别只留存不重算")
     @PostMapping("/events")
     @PreAuthorize("hasAnyRole('OPERATOR','ADMIN','REPLENISHER')")
     public Map<String, Object> publish(@RequestBody DeviceEvent event,
                                        @RequestParam(defaultValue = "false") boolean sync)
             throws Exception {
         if (sync) {
-            processor.process(event);
-            return Map.of("mode", "sync", "processed", 1);
+            DeviceEventProcessor.ProcessResult r = processor.processDetailed(event);
+            return Map.of("mode", "sync", "result", r.status(),
+                    "eventKey", r.eventKey(), "lateArrival", r.lateArrival());
         }
         String key = event.getCabinetNo() != null ? event.getCabinetNo() : event.getSessionNo();
         kafkaTemplate.send(KafkaConfig.TOPIC_DEVICE, key, event).get();
         return Map.of("mode", "kafka", "topic", KafkaConfig.TOPIC_DEVICE, "key", key);
     }
 
-    @Operation(summary = "批量上报设备事件（按顺序投递同一柜机分区）")
+    @Operation(summary = "批量上报设备事件（按顺序投递同一柜机分区；逐条幂等去重）")
     @PostMapping("/events/batch")
     @PreAuthorize("hasAnyRole('OPERATOR','ADMIN','REPLENISHER')")
     public Map<String, Object> publishBatch(@RequestBody List<DeviceEvent> events,
                                             @RequestParam(defaultValue = "false") boolean sync)
             throws Exception {
         List<String> keys = new ArrayList<>();
+        int processed = 0, duplicated = 0, late = 0;
         for (DeviceEvent e : events) {
             if (sync) {
-                processor.process(e);
+                DeviceEventProcessor.ProcessResult r = processor.processDetailed(e);
+                if ("DUPLICATE_IGNORED".equals(r.status())) duplicated++; else processed++;
+                if (r.lateArrival()) late++;
+                keys.add(r.eventKey());
             } else {
                 String key = e.getCabinetNo() != null ? e.getCabinetNo() : e.getSessionNo();
                 kafkaTemplate.send(KafkaConfig.TOPIC_DEVICE, key, e).get();
                 keys.add(key);
             }
         }
-        return Map.of("mode", sync ? "sync" : "kafka", "count", events.size(), "keys", keys);
+        Map<String, Object> resp = new java.util.LinkedHashMap<>();
+        resp.put("mode", sync ? "sync" : "kafka");
+        resp.put("count", events.size());
+        resp.put("processed", processed);
+        resp.put("duplicateIgnored", duplicated);
+        resp.put("lateArrival", late);
+        resp.put("keys", keys);
+        return resp;
     }
 }

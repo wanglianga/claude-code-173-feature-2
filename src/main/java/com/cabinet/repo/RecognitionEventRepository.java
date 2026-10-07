@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface RecognitionEventRepository extends JpaRepository<RecognitionEvent, Long> {
     List<RecognitionEvent> findBySessionIdOrderByDetectedAtAsc(Long sessionId);
+    List<RecognitionEvent> findBySessionIdAndLateArrivalTrue(Long sessionId);
 }

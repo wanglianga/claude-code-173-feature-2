@@ -27,6 +27,7 @@ public class DataSeeder implements CommandLineRunner {
     private final CabinetRepository cabinetRepository;
     private final ChannelRepository channelRepository;
     private final ProductBatchRepository batchRepository;
+    private final MemberAccountRepository accountRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -110,6 +111,11 @@ public class DataSeeder implements CommandLineRunner {
                 .expiryDate(LocalDate.now().plusDays(1))
                 .receivedQty(0).costPrice(milk.getCostPrice())
                 .status(BatchStatus.IN_STOCK).build());
+
+        // 演示会员账户（购物扣款/误判退款回补可查余额流水）
+        accountRepository.save(MemberAccount.builder()
+                .userCode("U1001").userName("王女士")
+                .balance(new BigDecimal("100.00")).build());
 
         log.info("种子数据初始化完成，测试账号统一密码 cabinet123");
     }

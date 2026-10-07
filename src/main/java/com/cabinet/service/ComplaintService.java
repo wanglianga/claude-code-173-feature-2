@@ -17,9 +17,10 @@ import java.util.List;
 
 /**
  * 客服投诉与售后：
+ * - 重复申诉防护：同一会话已有投诉时，新工单标记 DUPLICATE 并关联首单，不重复立案/退款；
  * - 证据回放：开门记录、多源识别结果（含视频片段定位）、订单明细、批次库存变化、温控曲线；
- * - 判责退款：支持整单/按行退款；商品已收回则回补库存（REFUND_RETURN 台账），
- *   未收回登记报损 REFUND_NO_RETURN；订单与会话进入已退款状态。
+ * - 判责退款统一走 {@link RefundService}（订单行锁 + 退款幂等键 + 账户流水幂等），
+ *   商品已收回回补库存（REFUND_RETURN），未收回登记报损 REFUND_NO_RETURN。
  */
 @Service
 @RequiredArgsConstructor
@@ -32,18 +33,21 @@ public class ComplaintService {
     private final OrderItemRepository orderItemRepository;
     private final BatchLedgerRepository ledgerRepository;
     private final TempLogRepository tempLogRepository;
-    private final ChannelStockRepository stockRepository;
-    private final ChannelRepository channelRepository;
     private final AppUserRepository userRepository;
-    private final LossRecordRepository lossRepository;
-    private final BatchLedgerService ledgerService;
-    private final BizEventPublisher bizEventPublisher;
+    private final RefundService refundService;
+    private final AccountService accountService;
 
     @Transactional
     public Complaint submit(String sessionNo, String category, String description) {
         DoorSession session = sessionRepository.findBySessionNo(sessionNo)
                 .orElseThrow(() -> ApiException.notFound("开门会话不存在"));
         OrderRecord order = orderRepository.findBySessionId(session.getId()).orElse(null);
+        accountService.ensureAccount(session.getUserCode(), session.getUserName());
+
+        List<Complaint> prior = complaintRepository.findBySessionIdOrderByIdAsc(session.getId());
+        Complaint first = prior.stream().filter(c -> !c.isDuplicate()).findFirst()
+                .orElse(prior.isEmpty() ? null : prior.get(0));
+
         Complaint complaint = Complaint.builder()
                 .complaintNo(genNo("CP"))
                 .session(session).order(order)
@@ -51,6 +55,18 @@ public class ComplaintService {
                 .category(category).description(description)
                 .status(ComplaintStatus.SUBMITTED)
                 .build();
+
+        if (first != null) {
+            // 重复申诉：保留工单但不进入新的退款流程
+            complaint.setDuplicate(true);
+            complaint.setDuplicateOfId(first.getId());
+            complaint.setDuplicateCount(first.getDuplicateCount() + 1);
+            complaint.setStatus(ComplaintStatus.DUPLICATE);
+            complaint.setResolution("重复申诉，关联首条工单 " + first.getComplaintNo()
+                    + "（当前结论 " + first.getStatus() + "），按原结论执行，不二次退款");
+            complaint.setResolvedAt(LocalDateTime.now());
+            return complaintRepository.save(complaint);
+        }
         return complaintRepository.save(complaint);
     }
 
@@ -66,10 +82,11 @@ public class ComplaintService {
         List<OrderItem> items = order != null
                 ? orderItemRepository.findByOrderId(order.getId()) : List.of();
 
-        // 该订单引起的批次库存变化（SALE_OUT），并补充该批次最近台账
         List<BatchLedger> ledgers = new ArrayList<>();
         for (OrderItem oi : items) {
-            ledgers.addAll(ledgerRepository.findByBatchIdOrderByIdAsc(oi.getBatch().getId()));
+            if (oi.getBatch() != null) {
+                ledgers.addAll(ledgerRepository.findByBatchIdOrderByIdAsc(oi.getBatch().getId()));
+            }
         }
         ledgers.sort(java.util.Comparator.comparing(BatchLedger::getId));
 
@@ -80,9 +97,9 @@ public class ComplaintService {
     }
 
     /**
-     * 判责处理：退款。
+     * 判责处理（保留旧入口）：退款走统一幂等执行器。
      * refundItems: orderItemId -> 退款数量（为空且 grantRefund=true 则整单退）
-     * goodsReturned: 商品是否已收回；未收回 -> 报损（退款未收回）
+     * goodsReturned: 商品是否已收回；未收回 -> 报损
      */
     @Transactional
     public Complaint resolve(String complaintNo, String handlerUsername, boolean grantRefund,
@@ -90,105 +107,47 @@ public class ComplaintService {
                              String resolution) {
         Complaint complaint = complaintRepository.findByComplaintNo(complaintNo)
                 .orElseThrow(() -> ApiException.notFound("投诉单不存在"));
+        if (complaint.isDuplicate()) {
+            throw ApiException.conflict("重复申诉工单不可直接退款，已关联首条工单 #"
+                    + complaint.getDuplicateOfId());
+        }
+        if (complaint.getStatus() == ComplaintStatus.RESOLVED_REFUNDED
+                || complaint.getStatus() == ComplaintStatus.RESOLVED_REJECTED
+                || complaint.getStatus() == ComplaintStatus.RESOLVED_UPHELD) {
+            throw ApiException.conflict("投诉已结案（" + complaint.getStatus()
+                    + "），重复提交不会二次退款");
+        }
         AppUser handler = userRepository.findByUsername(handlerUsername)
                 .orElseThrow(() -> ApiException.badRequest("客服账号不存在"));
         complaint.setHandler(handler);
-        complaint.setStatus(grantRefund
-                ? ComplaintStatus.RESOLVED_REFUNDED : ComplaintStatus.RESOLVED_REJECTED);
         complaint.setResolution(resolution);
         complaint.setResolvedAt(LocalDateTime.now());
 
-        OrderRecord order = complaint.getOrder();
         BigDecimal refundTotal = BigDecimal.ZERO;
-        List<String> refundDetail = new ArrayList<>();
+        String refundDetail = "";
 
-        if (grantRefund && order != null
-                && order.getStatus() != OrderStatus.REFUNDED
-                && order.getStatus() != OrderStatus.CANCELLED) {
-            List<OrderItem> orderItems = orderItemRepository.findByOrderId(order.getId());
-            for (OrderItem oi : orderItems) {
-                int refundQty;
-                if (refundItems == null || refundItems.isEmpty()) {
-                    refundQty = oi.getQty() - oi.getRefundedQty();
-                } else {
-                    refundQty = refundItems.stream()
-                            .filter(r -> r.orderItemId() == oi.getId())
-                            .findFirst().map(RefundLine::qty).orElse(0);
-                }
-                if (refundQty <= 0) continue;
-                if (refundQty > oi.getQty() - oi.getRefundedQty()) {
-                    throw ApiException.badRequest("退款数量超过可退数量");
-                }
-                oi.setRefundedQty(oi.getRefundedQty() + refundQty);
-                orderItemRepository.save(oi);
-                BigDecimal lineRefund = oi.getUnitPrice().multiply(BigDecimal.valueOf(refundQty));
-                refundTotal = refundTotal.add(lineRefund);
-                refundDetail.add(oi.getProduct().getSku() + " x" + refundQty + "=" + lineRefund);
-
-                // 库存处理：收回则回补货道库存（找该商品在原货道的最早批次行回补），
-                // 未收回则登记报损
-                if (goodsReturned) {
-                    ChannelStock stock = stockRepository
-                            .findByChannelIdAndBatchId(
-                                    channelId(oi), oi.getBatch().getId())
-                            .orElse(null);
-                    if (stock != null) {
-                        stock.setQtyOnHand(stock.getQtyOnHand() + refundQty);
-                        stockRepository.save(stock);
-                    }
-                    ledgerService.record(oi.getBatch(), order.getCabinet(),
-                            LedgerType.REFUND_RETURN, refundQty, lineRefund,
-                            "COMPLAINT", complaint.getId(),
-                            "投诉退款商品收回 " + complaintNo);
-                } else {
-                    BigDecimal cost = oi.getBatch().getCostPrice() != null
-                            ? oi.getBatch().getCostPrice().multiply(BigDecimal.valueOf(refundQty))
-                            : BigDecimal.ZERO;
-                    lossRepository.save(LossRecord.builder()
-                            .lossNo(genNo("LS"))
-                            .cabinet(order.getCabinet())
-                            .product(oi.getProduct()).batch(oi.getBatch())
-                            .reason(LossReason.REFUND_NO_RETURN)
-                            .qty(refundQty).costAmount(cost)
-                            .liability("OPERATOR")
-                            .bizType("COMPLAINT").bizId(complaint.getId())
-                            .remark("误判退款，商品未收回").build());
-                    ledgerService.record(oi.getBatch(), order.getCabinet(),
-                            LedgerType.LOSS_OUT, -refundQty, cost,
-                            "COMPLAINT", complaint.getId(),
-                            "投诉退款商品未收回 " + complaintNo);
-                }
-            }
-
-            order.setRefundedAmount(order.getRefundedAmount().add(refundTotal));
-            boolean allRefunded = orderItems.stream()
-                    .allMatch(oi -> oi.getRefundedQty() >= oi.getQty());
-            order.setStatus(allRefunded ? OrderStatus.REFUNDED : OrderStatus.PARTIALLY_REFUNDED);
-            orderRepository.save(order);
-
-            DoorSession session = complaint.getSession();
-            session.setStatus(SessionStatus.SETTLED_REFUNDED);
-            sessionRepository.save(session);
-
-            bizEventPublisher.publish("ORDER_REFUNDED", order.getOrderNo(),
-                    order.getCabinet().getCabinetNo(), null,
-                    "投诉 " + complaintNo + " 退款 " + refundTotal, refundTotal);
+        if (grantRefund && complaint.getOrder() != null) {
+            List<RefundService.RefundLine> lines = refundItems == null ? null
+                    : refundItems.stream()
+                        .map(r -> new RefundService.RefundLine(r.orderItemId(), r.qty())).toList();
+            RefundService.RefundResult result = refundService.execute(
+                    complaint.getOrder(), complaint, null,
+                    "COMPLAINT:" + complaint.getId(), lines, goodsReturned,
+                    "投诉 " + complaintNo + " " + resolution);
+            refundTotal = result.amount();
+            refundDetail = result.refundRecord().getDetailJson();
+            complaint.setStatus(ComplaintStatus.RESOLVED_REFUNDED);
+        } else {
+            complaint.setStatus(ComplaintStatus.RESOLVED_REJECTED);
         }
 
         complaint.setRefundAmount(refundTotal);
-        complaint.setRefundDetailJson(String.join("; ", refundDetail));
+        complaint.setRefundDetailJson(refundDetail);
         return complaintRepository.save(complaint);
     }
 
-    private Long channelId(OrderItem oi) {
-        return channelRepository
-                .findByCabinetIdAndCode(oi.getOrder().getCabinet().getId(), oi.getChannelCode())
-                .map(Channel::getId).orElse(null);
-    }
-
     private String genNo(String prefix) {
-        return prefix + LocalDate.now().toString().replace("-", "")
-                + String.format("%04d", System.nanoTime() % 10000);
+        return com.cabinet.util.BizNos.next(prefix);
     }
 
     public record RefundLine(Long orderItemId, Integer qty) {}

@@ -41,6 +41,7 @@ public class SessionSettlementService {
     private final RecognitionFusion fusion;
     private final AlertService alertService;
     private final BizEventPublisher bizEventPublisher;
+    private final AccountService accountService;
 
     @Value("${cabinet.recognition.confidence-threshold:0.75}")
     private double confidenceThreshold;
@@ -53,12 +54,13 @@ public class SessionSettlementService {
                                 String userName, LocalDateTime at) {
         Cabinet cabinet = cabinetRepository.findByCabinetNo(cabinetNo)
                 .orElseThrow(() -> ApiException.notFound("柜机不存在: " + cabinetNo));
+        LocalDateTime openedAt = at != null ? at : LocalDateTime.now();
         if (cabinet.getStatus() == CabinetStatus.ALARM_LOCKED) {
             // 食品安全：温控锁定柜机禁止开门售卖，记录被拒开门
             DoorSession rejected = DoorSession.builder()
                     .sessionNo(sessionNo)
                     .cabinet(cabinet).userCode(userCode).userName(userName)
-                    .openedAt(at).closedAt(at)
+                    .openedAt(openedAt).closedAt(openedAt)
                     .status(SessionStatus.CANCELLED)
                     .settleNote("温控报警锁定，开门被拒")
                     .build();
@@ -68,7 +70,7 @@ public class SessionSettlementService {
                 .sessionNo(sessionNo)
                 .cabinet(cabinet)
                 .userCode(userCode).userName(userName)
-                .openedAt(at)
+                .openedAt(openedAt)
                 .status(SessionStatus.OPEN)
                 .build();
         cabinet.setLastHeartbeatAt(at);
@@ -292,6 +294,14 @@ public class SessionSettlementService {
                 .flatMap(l -> l.sources().stream()).distinct().sorted().toList());
         orderRepository.save(order);
 
+        // 会员账户扣款（幂等：同一订单只扣一次），退款时按该流水口径回补
+        if (session.getUserCode() != null && total.signum() > 0) {
+            accountService.ensureAccount(session.getUserCode(), session.getUserName());
+            accountService.charge(session.getUserCode(), total,
+                    "ORDER:" + order.getId(), order.getOrderNo(),
+                    "开门购物扣款 会话 " + session.getSessionNo());
+        }
+
         if (session.getStatus() != SessionStatus.SETTLED) {
             session.setStatus(SessionStatus.SETTLED);
         }
@@ -311,6 +321,10 @@ public class SessionSettlementService {
             Channel channel = channelRepository
                     .findByCabinetIdAndCode(cabinet.getId(), line.channelCode()).orElse(null);
             if (channel == null) { errors.add("货道不存在 " + line.channelCode()); continue; }
+            if (channel.isSuspended()) {
+                // 货道因反复误识别被暂停：不自动扣款，挂起人工复核
+                errors.add("货道 " + line.channelCode() + " 已暂停售卖（疑似设备故障待维护），暂停自动结算");
+            }
             int sellable = stockRepository.findSellableByChannelFefo(channel.getId()).stream()
                     .mapToInt(s -> s.getQtyOnHand() - s.getQtyQuarantined()).sum();
             if (sellable < line.qty()) {
@@ -341,8 +355,7 @@ public class SessionSettlementService {
     }
 
     private String genNo(String prefix) {
-        return prefix + LocalDate.now().toString().replace("-", "")
-                + String.format("%04d", System.nanoTime() % 10000);
+        return com.cabinet.util.BizNos.next(prefix);
     }
 
     private record Deduction(String channelCode, Product product, ProductBatch batch, int qty) {}

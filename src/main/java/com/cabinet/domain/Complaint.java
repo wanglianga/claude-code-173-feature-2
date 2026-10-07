@@ -58,6 +58,17 @@ public class Complaint {
     @Column(length = 2000)
     private String resolution;
 
+    /** 是否为重复申诉（同一会话已存在投诉/复核单时不再重复立案退款） */
+    @Builder.Default
+    private boolean duplicate = false;
+
+    /** 指向首条投诉（重复申诉时记录），保留原始工单链路 */
+    private Long duplicateOfId;
+
+    /** 第几次重复申诉（0 表示首次） */
+    @Builder.Default
+    private int duplicateCount = 0;
+
     private LocalDateTime submittedAt;
     private LocalDateTime resolvedAt;
 

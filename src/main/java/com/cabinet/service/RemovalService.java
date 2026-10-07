@@ -237,8 +237,7 @@ public class RemovalService {
     }
 
     private String genNo(String prefix) {
-        return prefix + LocalDate.now().toString().replace("-", "")
-                + String.format("%04d", System.nanoTime() % 10000);
+        return com.cabinet.util.BizNos.next(prefix);
     }
 
     /** 手工下架行 */

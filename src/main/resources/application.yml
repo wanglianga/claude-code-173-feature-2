@@ -59,6 +59,11 @@ cabinet:
     near-expiry-days: 2
   # 临期扫描 cron（每日 02:10）
   scan-cron: "0 10 2 * * *"
+  review:
+    # 货道误判滚动统计窗口（小时，默认 7 天）
+    miscount-window-hours: 168
+    # 窗口内误判达到该次数判定设备故障，自动暂停货道售卖
+    miscount-suspend-threshold: 3
 
 logging:
   level:
