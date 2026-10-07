@@ -58,6 +58,12 @@ public class Complaint {
     @Column(length = 2000)
     private String resolution;
 
+    /** 重复申诉：指向同一会话的首张投诉单 ID（保留每次申诉与处理过程） */
+    private Long duplicateOfId;
+
+    /** 提交时系统研判建议快照（EVIDENCE_SUFFICIENT / SUSPECT_MISCHARGE / NEED_MANUAL） */
+    private String systemVerdict;
+
     private LocalDateTime submittedAt;
     private LocalDateTime resolvedAt;
 

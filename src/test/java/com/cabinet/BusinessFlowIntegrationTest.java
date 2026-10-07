@@ -119,10 +119,10 @@ class BusinessFlowIntegrationTest {
         sessionService.openDoor(d.cabinet.getCabinetNo(), sessionNo, "U001", "用户甲", null);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
                 d.product.getSku(), null, "VISION", "PICK", 2, 0.95, null,
-                "v.mp4", 1, 3, null, null);
+                "v.mp4", 1, 3, null, null, null, false);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
                 d.product.getSku(), null, "RFID", "PICK", 2, 0.99, null,
-                "v.mp4", 1, 3, null, null);
+                "v.mp4", 1, 3, null, null, null, false);
 
         OrderRecord order = sessionService.closeDoor(sessionNo, 520, null);
 
@@ -148,9 +148,9 @@ class BusinessFlowIntegrationTest {
         String sessionNo = "S-" + System.nanoTime();
         sessionService.openDoor(d.cabinet.getCabinetNo(), sessionNo, "U002", "用户乙", null);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "VISION", "PICK", 1, 0.95, null, null, null, null, null, null);
+                d.product.getSku(), null, "VISION", "PICK", 1, 0.95, null, null, null, null, null, null, null, false);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "VISION", "PUT", 1, 0.93, null, null, null, null, null, null);
+                d.product.getSku(), null, "VISION", "PUT", 1, 0.93, null, null, null, null, null, null, null, false);
         OrderRecord order = sessionService.closeDoor(sessionNo, 0, null);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
         assertThat(stockRepository.findByChannelId(d.channel.getId()).get(0).getQtyOnHand())
@@ -164,9 +164,9 @@ class BusinessFlowIntegrationTest {
         sessionService.openDoor(d.cabinet.getCabinetNo(), sessionNo, "U003", "用户丙", null);
         // 重量识别 2 件 vs 视觉 1 件 -> 冲突
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "WEIGHT", "PICK", 2, 0.9, 520, null, null, null, null, null);
+                d.product.getSku(), null, "WEIGHT", "PICK", 2, 0.9, 520, null, null, null, null, null, null, false);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "VISION", "PICK", 1, 0.8, null, null, null, null, null, null);
+                d.product.getSku(), null, "VISION", "PICK", 1, 0.8, null, null, null, null, null, null, null, false);
         OrderRecord pending = sessionService.closeDoor(sessionNo, 260, null);
         assertThat(pending.getStatus()).isEqualTo(OrderStatus.PENDING_REVIEW);
         // 尚未扣库存
@@ -252,10 +252,10 @@ class BusinessFlowIntegrationTest {
         sessionService.openDoor(d.cabinet.getCabinetNo(), sessionNo, "U005", "投诉用户", null);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
                 d.product.getSku(), null, "VISION", "PICK", 1, 0.99, null,
-                "clip.mp4", 0, 2, null, null);
+                "clip.mp4", 0, 2, null, null, null, false);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
                 d.product.getSku(), null, "RFID", "PICK", 1, 0.99, null,
-                "clip.mp4", 0, 2, null, null);
+                "clip.mp4", 0, 2, null, null, null, false);
         OrderRecord order = sessionService.closeDoor(sessionNo, 260, null);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CHARGED);
 
@@ -290,9 +290,9 @@ class BusinessFlowIntegrationTest {
         String sessionNo = "S-" + System.nanoTime();
         sessionService.openDoor(d.cabinet.getCabinetNo(), sessionNo, "U006", "用户己", null);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "VISION", "PICK", 1, 0.99, null, null, null, null, null, null);
+                d.product.getSku(), null, "VISION", "PICK", 1, 0.99, null, null, null, null, null, null, null, false);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "RFID", "PICK", 1, 0.99, null, null, null, null, null, null);
+                d.product.getSku(), null, "RFID", "PICK", 1, 0.99, null, null, null, null, null, null, null, false);
         OrderRecord order = sessionService.closeDoor(sessionNo, 260, null);
 
         AppUser cs = fx.user("CUSTOMER_SERVICE");
@@ -314,9 +314,9 @@ class BusinessFlowIntegrationTest {
         String sessionNo = "S-" + System.nanoTime();
         sessionService.openDoor(d.cabinet.getCabinetNo(), sessionNo, "U007", "用户庚", null);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "VISION", "PICK", 3, 0.99, null, null, null, null, null, null);
+                d.product.getSku(), null, "VISION", "PICK", 3, 0.99, null, null, null, null, null, null, null, false);
         sessionService.recordRecognition(sessionNo, d.cabinet.getCabinetNo(), "A01",
-                d.product.getSku(), null, "RFID", "PICK", 3, 0.99, null, null, null, null, null, null);
+                d.product.getSku(), null, "RFID", "PICK", 3, 0.99, null, null, null, null, null, null, null, false);
         sessionService.closeDoor(sessionNo, 780, null);
         // 临期下架报废 2 件（供应商责任）
         ProductBatch fresh = d.batch;

@@ -27,6 +27,7 @@ public class DataSeeder implements CommandLineRunner {
     private final CabinetRepository cabinetRepository;
     private final ChannelRepository channelRepository;
     private final ProductBatchRepository batchRepository;
+    private final WalletAccountRepository walletAccountRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -95,13 +96,13 @@ public class DataSeeder implements CommandLineRunner {
                 .status(CabinetStatus.NORMAL).build());
 
         channelRepository.save(Channel.builder().cabinet(c1).code("A01")
-                .plannedProduct(sandwich).capacity(12).build());
+                .plannedProduct(sandwich).capacity(12).equipmentSn("EQ-CAB001-A01").build());
         channelRepository.save(Channel.builder().cabinet(c1).code("A02")
-                .plannedProduct(milk).capacity(20).build());
+                .plannedProduct(milk).capacity(20).equipmentSn("EQ-CAB001-A02").build());
         channelRepository.save(Channel.builder().cabinet(c2).code("A01")
-                .plannedProduct(water).capacity(30).build());
+                .plannedProduct(water).capacity(30).equipmentSn("EQ-CAB002-A01").build());
         channelRepository.save(Channel.builder().cabinet(c3).code("A01")
-                .plannedProduct(milk).capacity(20).build());
+                .plannedProduct(milk).capacity(20).equipmentSn("EQ-CAB003-A01").build());
 
         // 一个即将临期的批次（供定时扫描演示）
         batchRepository.save(ProductBatch.builder()
@@ -110,6 +111,12 @@ public class DataSeeder implements CommandLineRunner {
                 .expiryDate(LocalDate.now().plusDays(1))
                 .receivedQty(0).costPrice(milk.getCostPrice())
                 .status(BatchStatus.IN_STOCK).build());
+
+        // 演示用户钱包（开门购物扣款/误扣款复核退款走账户余额）
+        walletAccountRepository.save(WalletAccount.builder()
+                .userCode("U1001").balance(new BigDecimal("100.00")).build());
+        walletAccountRepository.save(WalletAccount.builder()
+                .userCode("U1002").balance(new BigDecimal("50.00")).build());
 
         log.info("种子数据初始化完成，测试账号统一密码 cabinet123");
     }

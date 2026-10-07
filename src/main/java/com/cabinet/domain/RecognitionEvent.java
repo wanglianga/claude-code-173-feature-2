@@ -2,6 +2,7 @@ package com.cabinet.domain;
 
 import com.cabinet.domain.enums.DetectAction;
 import com.cabinet.domain.enums.RecognitionSource;
+import com.cabinet.domain.enums.SampleVerdict;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -64,4 +65,20 @@ public class RecognitionEvent extends BaseEntity {
     /** 识别原文（设备上报 JSON 快照） */
     @Column(length = 2000)
     private String rawPayload;
+
+    /** 设备事件 ID（与 device_event_log 对应，用于补传溯源） */
+    private String eventId;
+
+    /** 是否补传事件（设备离线恢复后集中上报/会话已结束时迟到到达，仅存档不触发结算） */
+    @Builder.Default
+    private boolean backfill = false;
+
+    /** 识别样本判定：复核退款/驳回时同步修正，供识别模型纠偏 */
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private SampleVerdict verdict = SampleVerdict.NONE;
+
+    /** 样本判定说明（哪张投诉单、何种结论） */
+    @Column(length = 500)
+    private String verdictNote;
 }

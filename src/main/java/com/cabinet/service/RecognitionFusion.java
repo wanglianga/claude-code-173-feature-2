@@ -70,15 +70,17 @@ public class RecognitionFusion {
                     confidence, conflict, sources));
         }
 
-        // 称重交叉校验：净拿取总重 vs 柜机重量净变化
-        if (weightDeltaGram != 0) {
+        // 称重交叉校验：净拿取总重 vs 柜机重量净变化。
+        // delta=0 也必须校验：重量已恢复但识别仍认为商品被取走（拿起查看后放回），
+        // 属于典型矛盾场景，不能直接判定用户购买，压低置信度转人工确认。
+        boolean hasWeightData = lines.stream()
+                .anyMatch(l -> l.product.getUnitWeightGram() != null);
+        if (hasWeightData && !lines.isEmpty()) {
             int expected = lines.stream()
                     .mapToInt(l -> l.qty * (l.product.getUnitWeightGram() != null
                             ? l.product.getUnitWeightGram() : 0))
                     .sum();
-            boolean hasWeightData = lines.stream()
-                    .anyMatch(l -> l.product.getUnitWeightGram() != null);
-            if (hasWeightData && Math.abs(Math.abs(weightDeltaGram) - expected) > weightToleranceGram) {
+            if (Math.abs(Math.abs(weightDeltaGram) - expected) > weightToleranceGram) {
                 for (int i = 0; i < lines.size(); i++) {
                     NetLine l = lines.get(i);
                     lines.set(i, new NetLine(l.channelCode, l.product, l.batchHint, l.qty,

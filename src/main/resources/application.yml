@@ -59,6 +59,13 @@ cabinet:
     near-expiry-days: 2
   # 临期扫描 cron（每日 02:10）
   scan-cron: "0 10 2 * * *"
+  review:
+    # 货道健康：窗口内误扣款退款投诉达到预警次数即 WARN 告警
+    channel-complaint-warn: 2
+    # 达到故障阈值：判定疑似设备故障，暂停货道并自动派维护工单
+    channel-complaint-threshold: 3
+    # 统计窗口（天）
+    channel-complaint-window-days: 7
 
 logging:
   level:

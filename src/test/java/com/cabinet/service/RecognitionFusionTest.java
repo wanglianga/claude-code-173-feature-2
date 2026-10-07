@@ -79,4 +79,16 @@ class RecognitionFusionTest {
         assertThat(lines.get(0).conflict()).isTrue();
         assertThat(lines.get(0).minConfidence()).isLessThan(0.75);
     }
+
+    @Test
+    void 重量已恢复但视觉仍认为取走应压置信度转人工() {
+        Product p = product(260);
+        List<RecognitionEvent> events = new ArrayList<>(List.of(
+                evt(p, RecognitionSource.VISION, DetectAction.PICK, 1, 0.95, "A01", null)));
+        // 拿起查看后放回：关门净重 0，但视觉净拿取 1 件 -> 矛盾，不能直接判定购买
+        var lines = fusion.fuse(events, 0, 80);
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).conflict()).isTrue();
+        assertThat(lines.get(0).minConfidence()).isLessThan(0.75);
+    }
 }

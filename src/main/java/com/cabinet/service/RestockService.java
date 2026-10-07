@@ -106,6 +106,10 @@ public class RestockService {
         if (channel == null) {
             warning = PlacementWarning.UNKNOWN_CHANNEL;
             warningDetail = "柜机无此货道: " + actualChannelCode;
+        } else if (channel.getStatus() == ChannelStatus.SUSPENDED) {
+            // 货道已暂停（疑似设备故障待维护）：禁止上架，避免继续误售
+            throw ApiException.conflict("货道 " + actualChannelCode
+                    + " 已暂停（疑似设备故障待维护），禁止上架");
         } else if (channel.getPlannedProduct() != null
                 && !channel.getPlannedProduct().getId().equals(product.getId())) {
             warning = PlacementWarning.WRONG_CHANNEL;

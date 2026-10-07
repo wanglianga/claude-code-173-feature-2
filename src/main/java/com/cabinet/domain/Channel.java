@@ -1,5 +1,6 @@
 package com.cabinet.domain;
 
+import com.cabinet.domain.enums.ChannelStatus;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -26,4 +27,12 @@ public class Channel extends BaseEntity {
     private Product plannedProduct;
 
     private Integer capacity;
+
+    /** 运行状态：NORMAL / SUSPENDED（反复误扣款投诉，疑似设备故障暂停） */
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private ChannelStatus status = ChannelStatus.NORMAL;
+
+    /** 当前货道设备序列号（换机后更新，旧值留在维护工单） */
+    private String equipmentSn;
 }

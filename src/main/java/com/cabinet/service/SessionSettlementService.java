@@ -41,6 +41,8 @@ public class SessionSettlementService {
     private final RecognitionFusion fusion;
     private final AlertService alertService;
     private final BizEventPublisher bizEventPublisher;
+    private final WalletService walletService;
+    private final ReviewAuditService auditService;
 
     @Value("${cabinet.recognition.confidence-threshold:0.75}")
     private double confidenceThreshold;
@@ -51,6 +53,12 @@ public class SessionSettlementService {
     @Transactional
     public DoorSession openDoor(String cabinetNo, String sessionNo, String userCode,
                                 String userName, LocalDateTime at) {
+        // 幂等：设备重试/补传重复开门事件，返回已存在会话，不重复建单
+        var existing = sessionRepository.findBySessionNo(sessionNo);
+        if (existing.isPresent()) {
+            log.info("重复开门事件 sessionNo={}，返回已存在会话", sessionNo);
+            return existing.get();
+        }
         Cabinet cabinet = cabinetRepository.findByCabinetNo(cabinetNo)
                 .orElseThrow(() -> ApiException.notFound("柜机不存在: " + cabinetNo));
         if (cabinet.getStatus() == CabinetStatus.ALARM_LOCKED) {
@@ -81,7 +89,8 @@ public class SessionSettlementService {
                                               String sku, String batchNo, String source, String action,
                                               Integer qty, Double confidence, Integer weightGram,
                                               String videoUrl, Integer clipStart, Integer clipEnd,
-                                              LocalDateTime detectedAt, String rawPayload) {
+                                              LocalDateTime detectedAt, String rawPayload,
+                                              String eventId, boolean backfill) {
         DoorSession session = sessionRepository.findBySessionNo(sessionNo)
                 .orElseThrow(() -> ApiException.notFound("开门会话不存在: " + sessionNo));
         Cabinet cabinet = cabinetRepository.findByCabinetNo(cabinetNo)
@@ -89,7 +98,10 @@ public class SessionSettlementService {
         Product product = sku != null ? productRepository.findBySku(sku).orElse(null) : null;
         ProductBatch batch = batchNo != null ? batchRepository.findByBatchNo(batchNo).orElse(null) : null;
 
-        return eventRepository.save(RecognitionEvent.builder()
+        // 设备离线后集中补传/迟到事件：会话已结束（已结算/已退款/已取消）时仅存档留证，
+        // 不触发重新结算，更不会造成二次扣款或二次退款
+        boolean late = session.getStatus() != SessionStatus.OPEN;
+        RecognitionEvent saved = eventRepository.save(RecognitionEvent.builder()
                 .session(session).cabinet(cabinet)
                 .channelCode(channelCode).product(product).batch(batch)
                 .source(RecognitionSource.valueOf(source))
@@ -100,7 +112,15 @@ public class SessionSettlementService {
                 .videoClipUrl(videoUrl).clipStartSec(clipStart).clipEndSec(clipEnd)
                 .detectedAt(detectedAt != null ? detectedAt : LocalDateTime.now())
                 .rawPayload(rawPayload)
+                .eventId(eventId)
+                .backfill(backfill || late)
                 .build());
+        if (late) {
+            auditService.log("SESSION", sessionNo, "DEVICE_EVENT_BACKFILL", "system",
+                    String.format("会话已%s，设备补传识别事件(%s %s %s x%d)仅存档，不触发结算变更",
+                            session.getStatus(), source, action, sku, qty == null ? 1 : qty));
+        }
+        return saved;
     }
 
     /** 关门结算 */
@@ -109,6 +129,9 @@ public class SessionSettlementService {
         DoorSession session = sessionRepository.findBySessionNo(sessionNo)
                 .orElseThrow(() -> ApiException.notFound("开门会话不存在: " + sessionNo));
         if (session.getStatus() != SessionStatus.OPEN) {
+            // 重复/迟到关门事件（设备重试、离线补传）：原结算结果保持不变
+            auditService.log("SESSION", sessionNo, "DEVICE_EVENT_DUPLICATE", "system",
+                    "重复或迟到的关门事件，会话已" + session.getStatus() + "，忽略");
             return orderRepository.findBySessionId(session.getId()).orElse(null);
         }
         session.setClosedAt(closedAt != null ? closedAt : LocalDateTime.now());
@@ -291,6 +314,10 @@ public class SessionSettlementService {
         order.setNote("融合识别源: " + lines.stream()
                 .flatMap(l -> l.sources().stream()).distinct().sorted().toList());
         orderRepository.save(order);
+
+        // 账户余额扣款（幂等：同一订单只扣一次，重复结算/补传不会二次扣款）
+        walletService.charge(session.getUserCode(), total, "ORDER", order.getId(),
+                "订单 " + order.getOrderNo() + " 关门结算扣款");
 
         if (session.getStatus() != SessionStatus.SETTLED) {
             session.setStatus(SessionStatus.SETTLED);

@@ -52,5 +52,11 @@ public class DeviceEvent {
     /** 卡货货道 */
     private String jamChannelCode;
 
+    /** 设备侧事件唯一 ID（幂等去重键；重复投递/补传不重复处理） */
+    private String eventId;
+
+    /** 设备离线恢复后集中补传标记 */
+    private Boolean backfill;
+
     private LocalDateTime eventTime;
 }
